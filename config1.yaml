@@ -1,0 +1,35 @@
+random_generator:
+  train_n: 60
+  test_n: 1000
+  J: 2
+  I: 4
+  p: 0.9
+  lam_r: 2.0
+  lam_w: 5.0
+  c: [-14, -9, -20, -15]
+  M: 1000
+  epochs: 30
+
+  # Intervals for regular regime
+  h_int_r: [5000, 6000]
+  q_ints_r:
+    - [6, 8]
+    - [6, 8]
+  w_ints_r:
+    - [0.8, 1]
+    - [0.8, 1]
+
+  # Intervals for extreme regime
+  h_int_w: [500, 600]
+  q_ints_w:
+    - [15, 20]
+    - [15, 20]
+  w_ints_w:
+    - [0.5, 0.6]
+    - [0.5, 0.6]
+
+  # Optional: override T; if omitted, defaults are used in code
+  T:
+    - [-10, -6, -8, -4]
+    - [-6, -2, -3, -2]
+    - [0, 0, 0, 0]
