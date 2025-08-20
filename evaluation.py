@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 from matplotlib.font_manager import FontProperties
 from utils import sample_from_config
-
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
     """在测试集上评估解的性能"""
@@ -137,7 +137,7 @@ def evaluate_M_T_performance(A, b, M_list, n_items, n_machines):
     plt.show()
 
 
-def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K=30, alpha_list=None):
+def run_experiment1(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K=30, alpha_list=None):
     if alpha_list is None:
         alpha_list = [0.05 * i for i in range(1, 21)]
     alpha_list = np.array(alpha_list)
@@ -173,6 +173,53 @@ def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K
     return results
 
 
+def worker(alpha, train_samples, test_samples, A, b, c, M, n_items, n_machines):
+    apub = APUB(A, b, c=c, n_items=n_items, n_machines=n_machines, model=gp.Model())
+    x_optimal, _, certificate = apub.solve_two_stage_apub(train_samples, alpha=alpha, M_bootstrap=M)
+    eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=c, n_items=n_items, n_machines=n_machines)
+    return alpha, eval_result['mean_cost'], eval_result['reliability'], certificate
+
+
+def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K=30, alpha_list=None, max_workers=None):
+    if alpha_list is None:
+        alpha_list = [0.05 * i for i in range(1, 21)]
+    alpha_list = np.array(alpha_list)
+
+    results = {alpha: {'costs': [], 'reliabilities': []} for alpha in alpha_list}
+    pg = ParametersGenerator()
+
+    for trial in range(K):
+        train_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=True))
+        test_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=False))
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(worker, alpha, train_samples, test_samples, A, b, c, M, n_items, n_machines): alpha
+                for alpha in alpha_list
+            }
+            for future in as_completed(futures):
+                alpha, cost, reliability, certificate = future.result()
+                results[alpha]['costs'].append(cost)
+                results[alpha]['reliabilities'].append(reliability)
+                print(f'epoch {trial+1} of {K}, alpha={alpha:.2f}, '
+                      f'cost: {np.mean(results[alpha]["costs"]):.2f}, '
+                      f'reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, '
+                      f'certificate: {certificate:.2f}')
+
+    serializable_results = {
+        str(alpha): {
+            'costs': [float(c) for c in vals['costs']],
+            'reliabilities': [float(r) for r in vals['reliabilities']]
+        }
+        for alpha, vals in results.items()
+    }
+
+    save_path = f"apub_results_ee{data_size}.json"
+    with open(save_path, "w") as f:
+        json.dump(serializable_results, f, indent=4)
+    print(f"\n Results saved to {save_path}")
+    return results
+
 def plot_apub_results(results, mark_outliers=True):
     try:
         plt.rcParams["text.usetex"] = True
@@ -190,8 +237,8 @@ def plot_apub_results(results, mark_outliers=True):
     cost_matrix = cost_matrix.T  # shape: (K, len_alpha)
 
     mean_costs = np.mean(cost_matrix, axis=0)
-    lower_quantile = np.quantile(cost_matrix, 0.1, axis=0)
-    upper_quantile = np.quantile(cost_matrix, 0.9, axis=0)
+    lower_quantile = np.quantile(cost_matrix, 0.2, axis=0)
+    upper_quantile = np.quantile(cost_matrix, 0.8, axis=0)
 
     coverage = [np.mean(results[a]['reliabilities']) for a in alpha_list]
 
