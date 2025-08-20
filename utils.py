@@ -71,7 +71,7 @@ def sample_from_config(cfg_or_path: Union[str, Dict[str, Any]], train=True, rng=
         lam_r=lam_r, lam_w=lam_w,
         h_int_r=h_int_r, q_ints_r=q_ints_r, w_ints_r=w_ints_r,
         h_int_w=h_int_w, q_ints_w=q_ints_w, w_ints_w=w_ints_w,
-        seed=int(g["seed"]), rng=rng)
+        seed=None, rng=rng)
     
     T_cfg = np.array(g["T"], dtype=float)
     out["T"] = T_cfg

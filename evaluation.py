@@ -1,3 +1,4 @@
+import pickle
 import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
@@ -10,6 +11,7 @@ from collections import defaultdict
 from matplotlib.font_manager import FontProperties
 from utils import sample_from_config
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
 
 def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
     """在测试集上评估解的性能"""
@@ -172,7 +174,6 @@ def run_experiment1(A, b, c, M, n_items, n_machines, data_size, test_size=1000, 
     print(f"\n Results saved to {save_path}")
     return results
 
-
 def worker(alpha, train_samples, test_samples, A, b, c, M, n_items, n_machines):
     apub = APUB(A, b, c=c, n_items=n_items, n_machines=n_machines, model=gp.Model())
     x_optimal, _, certificate = apub.solve_two_stage_apub(train_samples, alpha=alpha, M_bootstrap=M)
@@ -180,17 +181,27 @@ def worker(alpha, train_samples, test_samples, A, b, c, M, n_items, n_machines):
     return alpha, eval_result['mean_cost'], eval_result['reliability'], certificate
 
 
-def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K=30, alpha_list=None, max_workers=None):
+def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K=30, alpha_list=None, max_workers=None, data_path=None):
     if alpha_list is None:
         alpha_list = [0.05 * i for i in range(1, 21)]
     alpha_list = np.array(alpha_list)
+
+    if data_path is not None:
+        with open(f"{data_path}/train_samples.pkl", "rb") as f:
+            train_samples_list = pickle.load(f)
+        with open(f"{data_path}/test_samples.pkl", "rb") as f:
+            test_samples_list = pickle.load(f)
 
     results = {alpha: {'costs': [], 'reliabilities': []} for alpha in alpha_list}
     pg = ParametersGenerator()
 
     for trial in range(K):
-        train_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=True))
-        test_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=False))
+        if data_path is not None:
+            train_samples = train_samples_list[trial]
+            test_samples = test_samples_list[trial]
+        else:
+            train_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=True))
+            test_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=False))
 
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -220,13 +231,14 @@ def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K
     print(f"\n Results saved to {save_path}")
     return results
 
+
 def plot_apub_results(results, mark_outliers=True):
-    try:
-        plt.rcParams["text.usetex"] = True
-        plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
-    except Exception:
-        print("Warning: LaTeX not found, using default text rendering.")
-        plt.rcParams["text.usetex"] = False
+    # try:
+    #     plt.rcParams["text.usetex"] = True
+    #     plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
+    # except Exception:
+    #     print("Warning: LaTeX not found, using default text rendering.")
+    #     plt.rcParams["text.usetex"] = False
 
     plt.rcParams["font.family"] = "serif"
     bold_times = FontProperties(family='Times New Roman', size=16, weight='bold')
@@ -237,8 +249,8 @@ def plot_apub_results(results, mark_outliers=True):
     cost_matrix = cost_matrix.T  # shape: (K, len_alpha)
 
     mean_costs = np.mean(cost_matrix, axis=0)
-    lower_quantile = np.quantile(cost_matrix, 0.2, axis=0)
-    upper_quantile = np.quantile(cost_matrix, 0.8, axis=0)
+    lower_quantile = np.quantile(cost_matrix, 0.1, axis=0)
+    upper_quantile = np.quantile(cost_matrix, 0.9, axis=0)
 
     coverage = [np.mean(results[a]['reliabilities']) for a in alpha_list]
 

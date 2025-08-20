@@ -3,12 +3,15 @@ from apub import APUB
 from saa import SAA
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle
+import os
 from evaluation import evaluate_oos
 from utils import load_config, sample_from_config
 from params_generator import ParametersGenerator
 
 if __name__ == "__main__":
     cfg_path = "config.yaml"
+    
     # Load shared sampling hyperparameters from config
     full_cfg = load_config(cfg_path)
     rg_cfg = full_cfg.get("random_generator", full_cfg)
@@ -16,6 +19,8 @@ if __name__ == "__main__":
     I = int(rg_cfg["I"]) 
     c = list(rg_cfg["c"]) 
     M = int(rg_cfg["M"]) 
+    n = int(rg_cfg["train_n"])
+    epochs = int(rg_cfg["epochs"])
     
     b = np.zeros(J)
     A = np.zeros((J,I))
@@ -26,18 +31,20 @@ if __name__ == "__main__":
     
     apub_costs = []
     apub_reliabilities = []
-    
-    # alpha_list = [0.05 * i for i in range(1, 21)]
-    # alpha_list = np.array(alpha_list)
-    # results = {alpha: {'costs': [], 'reliabilities': []} for alpha in alpha_list}
+
+    train_samples_list = []
+    test_samples_list = []
 
     # SAA results
-    for r in range(30):
+    for r in range(epochs):
         train_samples = pg.generate_parameters(samples = sample_from_config(cfg_path, train=True))
         test_samples = pg.generate_parameters(samples=sample_from_config(cfg_path, train=False))
+        train_samples_list.append(train_samples)
+        test_samples_list.append(test_samples)
+
         x_opt, obj_val = saa.solve_nf(train_samples)
         val = saa.saa_oos(x_opt, test_samples)
-        print(f'SAA trial {r+1}/30: cost={val:.2f}')
+        print(f'SAA trial {r+1}/{epochs}: cost={val:.2f}')
         obj_values.append(val)
 
         apub_solver = APUB(A, b, c=c, n_items=I, n_machines=J, model=gp.Model('APUB'))
@@ -50,28 +57,16 @@ if __name__ == "__main__":
         apub_costs.append(eval_result['mean_cost'])
         apub_reliabilities.append(eval_result['reliability'])
         
-        print(f'APUB trial {r+1}/30: cost={eval_result["mean_cost"]:.2f}, reliability={eval_result["reliability"]:.3f}')
+        print(f'APUB trial {r+1}/{epochs}: cost={eval_result["mean_cost"]:.2f}, reliability={eval_result["reliability"]:.3f}')
 
-    #     for alpha in alpha_list:
-    #         apub = APUB(A, b, n_items=4, n_machines=2, model=gp.Model())
-    #         x_optimal, eta_optimal, certificate = apub.solve_two_stage_apub(
-    #             train_samples,
-    #             alpha=alpha,
-    #             M_bootstrap=1000,
-    #         )
-    #         # x_optimal, certificate = apub.extensive_form(train_samples, alpha=alpha, M_bootstrap=M)
-    #         eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=params.c, n_items=4, n_machines=2)
-    #         results[alpha]['costs'].append(eval_result['mean_cost'])
-    #         results[alpha]['reliabilities'].append(eval_result['reliability'])
-    #         print(f'epoch {r+1} of {30}, alpha={alpha:.2f}, '
-    #                 f'cost: {np.mean(results[alpha]["costs"]):.2f}, reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, certificate: {certificate:.2f}')
-    
-    # from evaluation import plot_apub_results
-    # plot_apub_results(results)
+    os.makedirs("samples", exist_ok=True)
+    with open(f"samples/train_samples.pkl", "wb") as f:
+        pickle.dump(train_samples_list, f)
+    with open(f"samples/test_samples.pkl", "wb") as f:
+        pickle.dump(test_samples_list, f)
 
     # Create side-by-side boxplot with reliability information
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
     # Side-by-side boxplots
     box_data = [obj_values, apub_costs]
     box_labels = [f'SAA', f'APUB (α={1})']
