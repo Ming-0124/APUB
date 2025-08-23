@@ -3,122 +3,197 @@ from apub import APUB
 from saa import SAA
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle
+import os
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from evaluation import evaluate_oos
 from utils import load_config, sample_from_config
 from params_generator import ParametersGenerator
 
+
+def run_trial_with_data(args):
+    r, cfg_path, J, I, c, M, A, b, train_samples, test_samples = args
+    # Initialize solvers with optimized settings
+    saa_model = initialize_solver(c, I, J)
+    apub_model = initialize_solver(c, I, J)
+    saa = SAA(c=c, n_items=I, n_machines=J, model=saa_model)
+    apub_solver = APUB(A, b, c=c, n_items=I, n_machines=J, model=apub_model)
+    x_opt, _ = saa.solve_nf(train_samples)
+    val = saa.saa_oos(x_opt, test_samples)
+    x_optimal1, _, certificate1,_ = apub_solver.solve_two_stage_apub(train_samples, alpha=1, M_bootstrap=M)
+    apub_solver = APUB(A, b, c=c, n_items=I, n_machines=J, model=initialize_solver(c, I, J))
+    x_optimal9, _, certificate9,_ = apub_solver.solve_two_stage_apub(train_samples, alpha=0.1, M_bootstrap=M)
+    eval_result1 = evaluate_oos(certificate1, x_optimal1, test_samples, c=c, n_items=I, n_machines=J)
+    eval_result9 = evaluate_oos(certificate9, x_optimal9, test_samples, c=c, n_items=I, n_machines=J)
+    return {
+        'train_samples': train_samples,
+        'test_samples': test_samples,
+        'saa_cost': val,
+        'apub_cost': eval_result1['mean_cost'],
+        'apub_reliability1': eval_result1['reliability'],
+        'apub_reliability9': eval_result9['reliability'],
+        'trial': r
+    }
+
+def initialize_solver(c, I, J):
+    """Initialize solvers with optimized settings"""
+    model = gp.Model()
+    # Optimize solver settings for faster solving
+    model.setParam('OutputFlag', 0)  # Suppress output
+    model.setParam('Threads', 1)  # Single thread per process for better parallel performance
+    model.setParam('Method', 1)  # Dual simplex - usually faster for this type of problem
+    return model
+
+def run_trial(r, cfg_path, J, I, c, M, A, b):
+    """Run a single trial of both SAA and APUB"""
+    # Samples will be provided externally
+    train_samples = None
+    test_samples = None
+    
+    # Initialize solvers with optimized settings
+    saa_model = initialize_solver(c, I, J)
+    apub_model = initialize_solver(c, I, J)
+    
+    # Create solver instances
+    saa = SAA(c=c, n_items=I, n_machines=J, model=saa_model)
+    apub_solver = APUB(A, b, c=c, n_items=I, n_machines=J, model=apub_model)
+    
+    # Solve SAA
+    x_opt, _ = saa.solve_nf(train_samples)
+    val = saa.saa_oos(x_opt, test_samples)
+    
+    # Solve APUB
+    x_optimal, _, certificate,_ = apub_solver.solve_two_stage_apub(train_samples, alpha=1, M_bootstrap=M)
+    eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=c, n_items=I, n_machines=J)
+    
+    return {
+        'train_samples': train_samples,
+        'test_samples': test_samples,
+        'saa_cost': val,
+        'apub_cost': eval_result['mean_cost'],
+        'apub_reliability': eval_result['reliability'],
+        'trial': r
+    }
+
 if __name__ == "__main__":
+    np.random.seed(42)  # For reproducibility
+    use_saved_data = True  # Set to False to generate new data
     cfg_path = "config.yaml"
-    # Load shared sampling hyperparameters from config
+    
     full_cfg = load_config(cfg_path)
     rg_cfg = full_cfg.get("random_generator", full_cfg)
     J = int(rg_cfg["J"]) 
     I = int(rg_cfg["I"]) 
     c = list(rg_cfg["c"]) 
     M = int(rg_cfg["M"]) 
+    n = int(rg_cfg["train_n"])
+    epochs = int(rg_cfg["epochs"])
     
     b = np.zeros(J)
     A = np.zeros((J,I))
-    pg = ParametersGenerator()
     obj_values = []
-    
-    saa = SAA(c=c, n_items=I, n_machines=J, model=gp.Model('SAA'))
-    
     apub_costs = []
     apub_reliabilities = []
-    
-    # alpha_list = [0.05 * i for i in range(1, 21)]
-    # alpha_list = np.array(alpha_list)
-    # results = {alpha: {'costs': [], 'reliabilities': []} for alpha in alpha_list}
-
-    # SAA results
-    for r in range(30):
-        train_samples = pg.generate_parameters(samples = sample_from_config(cfg_path, train=True))
+    if use_saved_data:
+        with open("samples/merged_samples.pkl", "rb") as f:
+            sample_data = pickle.load(f)
+        train_samples_list = sample_data['train_samples']
+        test_samples = sample_data['test_samples']
+    else:
+        train_samples_list = []
+        pg = ParametersGenerator()
         test_samples = pg.generate_parameters(samples=sample_from_config(cfg_path, train=False))
-        x_opt, obj_val = saa.solve_nf(train_samples)
-        val = saa.saa_oos(x_opt, test_samples)
-        print(f'SAA trial {r+1}/30: cost={val:.2f}')
-        obj_values.append(val)
+        for _ in range(epochs):
+            train_samples = pg.generate_parameters(samples=sample_from_config(cfg_path, train=True))
+            train_samples_list.append(train_samples)
+        sample_data = {
+            'train_samples': train_samples_list,
+            'test_samples': test_samples
+        }
+        os.makedirs("samples", exist_ok=True)
+        with open("samples/samples2.pkl", "wb") as f:
+            pickle.dump(sample_data, f)
+            print("Samples saved to samples/samples2.pkl")
 
-        apub_solver = APUB(A, b, c=c, n_items=I, n_machines=J, model=gp.Model('APUB'))
-        
-        x_optimal, eta_optimal, certificate = apub_solver.solve_two_stage_apub(train_samples, alpha=1, M_bootstrap=M)
-        
-        # Evaluate out-of-sample performance
-        eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=c,n_items=I, n_machines=J)
-        
-        apub_costs.append(eval_result['mean_cost'])
-        apub_reliabilities.append(eval_result['reliability'])
-        
-        print(f'APUB trial {r+1}/30: cost={eval_result["mean_cost"]:.2f}, reliability={eval_result["reliability"]:.3f}')
-
-    #     for alpha in alpha_list:
-    #         apub = APUB(A, b, n_items=4, n_machines=2, model=gp.Model())
-    #         x_optimal, eta_optimal, certificate = apub.solve_two_stage_apub(
-    #             train_samples,
-    #             alpha=alpha,
-    #             M_bootstrap=1000,
-    #         )
-    #         # x_optimal, certificate = apub.extensive_form(train_samples, alpha=alpha, M_bootstrap=M)
-    #         eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=params.c, n_items=4, n_machines=2)
-    #         results[alpha]['costs'].append(eval_result['mean_cost'])
-    #         results[alpha]['reliabilities'].append(eval_result['reliability'])
-    #         print(f'epoch {r+1} of {30}, alpha={alpha:.2f}, '
-    #                 f'cost: {np.mean(results[alpha]["costs"]):.2f}, reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, certificate: {certificate:.2f}')
+    # Use process pool for parallel execution
+    n_cores = max(1, mp.cpu_count() - 1)  # Leave one core free
     
-    # from evaluation import plot_apub_results
-    # plot_apub_results(results)
+    apub_reliabilities1 = []
+    apub_reliabilities9 = []
+    with ProcessPoolExecutor(max_workers=n_cores) as executor:
+        args_list = [
+            (r, cfg_path, J, I, c, M, A, b, train_samples_list[r], test_samples)
+            for r in range(epochs)
+        ]
+        futures = [executor.submit(run_trial_with_data, args) for args in args_list]
+        for future in as_completed(futures):
+            result = future.result()
+            obj_values.append(result['saa_cost'])
+            apub_costs.append(result['apub_cost'])
+            apub_reliabilities1.append(result['apub_reliability1'])
+            apub_reliabilities9.append(result['apub_reliability9'])
+            r = result['trial']
+            print(f'SAA trial {r+1}/{epochs}: cost={result["saa_cost"]:.2f}')
+            print(f'APUB trial {r+1}/{epochs}: cost={result["apub_cost"]:.2f}, reliability1={result["apub_reliability1"]:.3f}, reliability01={result["apub_reliability9"]:.3f}')
 
     # Create side-by-side boxplot with reliability information
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # Side-by-side boxplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
     box_data = [obj_values, apub_costs]
-    box_labels = [f'SAA', f'APUB (α={1})']
+    box_labels = [f'SAA', f'APUB (α=1)']
     box_colors = ['lightblue', 'lightgreen']
-    
     bp = ax1.boxplot(box_data, labels=box_labels, patch_artist=True,
                      medianprops=dict(color='red', linewidth=2))
-    
-    # Set colors for each box individually
     for patch, color in zip(bp['boxes'], box_colors):
         patch.set_facecolor(color)
     ax1.set_ylabel("Cost Value")
     ax1.set_title("SAA vs APUB Performance Comparison")
     ax1.grid(True, linestyle='--', alpha=0.6)
-    
-    # Add reliability information as text on the plot
+
     saa_reliability = "N/A"  # SAA doesn't have reliability concept
-    apub_reliability = f"{np.mean(apub_reliabilities):.3f}"
-    
+    apub_reliability1 = f"{np.mean(apub_reliabilities1):.3f}"
+    apub_reliability9 = f"{np.mean(apub_reliabilities9):.3f}"
     ax1.text(0.02, 0.98, f'SAA Reliability: {saa_reliability}', 
               transform=ax1.transAxes, verticalalignment='top',
               bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-    ax1.text(0.02, 0.92, f'APUB Reliability: {apub_reliability}', 
+    ax1.text(0.02, 0.92, f'APUB Reliability (α=1): {apub_reliability1}', 
               transform=ax1.transAxes, verticalalignment='top',
               bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
-    
-    # Reliability distribution plot
-    ax2.hist(apub_reliabilities, bins=15, alpha=0.7, color='lightgreen', edgecolor='green')
-    ax2.axvline(np.mean(apub_reliabilities), color='red', linestyle='--', linewidth=2, 
-                 label=f'Mean: {np.mean(apub_reliabilities):.3f}')
-    ax2.set_xlabel("Reliability")
+
+    # Reliability distribution plots for alpha=1, 0.9
+    ax2.hist(apub_reliabilities1, bins=15, alpha=0.7, color='lightgreen', edgecolor='green')
+    ax2.axvline(np.mean(apub_reliabilities1), color='red', linestyle='--', linewidth=2, 
+                 label=f'Mean: {np.mean(apub_reliabilities1):.3f}')
+    ax2.set_xlabel("Reliability (α=1)")
     ax2.set_ylabel("Frequency")
-    ax2.set_title("APUB Coverage Probability Distribution (α=0.3)")
+    ax2.set_title("APUB Reliability Distribution (α=1)")
     ax2.legend()
     ax2.grid(True, linestyle='--', alpha=0.6)
-    
+
+    ax3.hist(apub_reliabilities9, bins=15, alpha=0.7, color='lightblue', edgecolor='navy')
+    ax3.axvline(np.mean(apub_reliabilities9), color='red', linestyle='--', linewidth=2, 
+                 label=f'Mean: {np.mean(apub_reliabilities9):.3f}')
+    ax3.set_xlabel("Reliability (α=0.1)")
+    ax3.set_ylabel("Frequency")
+    ax3.set_title("APUB Reliability Distribution (α=0.1)")
+    ax3.legend()
+    ax3.grid(True, linestyle='--', alpha=0.6)
+
     plt.tight_layout()
     plt.show()
-    
+
     # Print summary statistics
     print(f"\nSAA Summary:")
     print(f"Mean cost: {np.mean(obj_values):.2f}")
     print(f"Std cost: {np.std(obj_values):.2f}")
-    
-    print(f"\nAPUB Summary (α={1}):")
+
+    print(f"\nAPUB Summary (α=1):")
     print(f"Mean out-of-sample cost: {np.mean(apub_costs):.2f}")
     print(f"Std out-of-sample cost: {np.std(apub_costs):.2f}")
-    print(f"Mean reliability: {np.mean(apub_reliabilities):.3f}")
-    print(f"Std reliability: {np.std(apub_reliabilities):.3f}")
+    print(f"Mean reliability: {np.mean(apub_reliabilities1):.3f}")
+    print(f"Std reliability: {np.std(apub_reliabilities1):.3f}")
+
+    print(f"\nAPUB Summary (α=0.9):")
+    print(f"Mean reliability: {np.mean(apub_reliabilities9):.3f}")
+    print(f"Std reliability: {np.std(apub_reliabilities9):.3f}")
 

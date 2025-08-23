@@ -53,7 +53,7 @@ def sample_h_q_w(n, J, p, lam_r, lam_w,
     return: dict 含 h, q (n,J), w (n,J)
     """
     if rng is None:
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(seed=seed)
 
     d = 1 + J + J
     regime = rng.random(n) < p  # True=常态，False=极端

@@ -1,20 +1,21 @@
+import pickle
 import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
 from apub import APUB
 import time
+import multiprocessing as mp
 from params_generator import ParametersGenerator
 import json
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from matplotlib.font_manager import FontProperties
 from utils import sample_from_config
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
-    """在测试集上评估解的性能"""
     costs = []
-    reliability = []
     N = len(test_samples['h'])
 
     for m in range(N):
@@ -23,7 +24,7 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
         T_test = test_samples['T']
         q_test = test_samples['q'][m]
 
-        # 计算第二阶段成本
+        # second stage 
         sub_model = gp.Model("OOS_Evaluation")
         y = sub_model.addVars(3*n_machines, lb=0)
         sub_model.setObjective(gp.quicksum(q_test[j] * y[j] for j in range(n_machines)), GRB.MINIMIZE)
@@ -44,127 +45,145 @@ def evaluate_oos(certificate, x_optimal, test_samples, c, n_items, n_machines):
             total_cost = temp + sub_model.ObjVal
             costs.append(total_cost)
         else:
-            costs.append(np.inf)  # 标记不可行解
+            costs.append(np.inf) 
 
-    reliability.append(certificate >= np.mean(costs))
+    mean_cost = np.mean(costs)
     return {
-        'mean_cost': np.mean(costs),
-        'reliability': np.mean(reliability)
+        'mean_cost': mean_cost,
+        'reliability': int(certificate >= mean_cost)
     }
 
 
-def evaluate_M_T_performance(A, b, M_list, n_items, n_machines):
-    time_list = defaultdict(lambda: defaultdict(dict))
-    pg = ParametersGenerator()
+def process_M(args):
+    """Worker function to process a single M value"""
+    A, b, n_items, n_machines, M, xi_samples_list = args
+    tt1 = []
+    tt2 = []
+    cuts = []
+    
+    for i in range(20):
+        apub = APUB(A, b, n_items=n_items, n_machines=n_machines, model=gp.Model('Master Problem'))
+        
+        # Extensive form timing
+        start1 = time.perf_counter()
+        apub.extensive_form(xi_samples_list[i], alpha=0.1, M_bootstrap=M)
+        end1 = time.perf_counter()
+        
+        # L-shape method timing
+        start2 = time.perf_counter()
+        _, _, _, num_optimal_cuts = apub.solve_two_stage_apub(
+            xi_samples_list[i],
+            alpha=0.1,
+            M_bootstrap=M,
+        )
+        end2 = time.perf_counter()
+        
+        tt1.append(end1 - start1)
+        tt2.append(end2 - start2)
+        cuts.append(num_optimal_cuts)
+    
+    return {
+        'M': M,
+        'extensive_form_time': np.mean(tt1),
+        'lshape_time': np.mean(tt2),
+        'cuts': np.mean(cuts)
+    }
+
+def evaluate_M_T_performance(A, b, M_list, n_items, n_machines, save_path='./results/time.json'):
+    result = defaultdict(lambda: defaultdict(dict))
+    
+    # Get the number of CPU cores (leave one core free)
+    n_cores = max(1, mp.cpu_count() - 1)
+    
     for data_size in [120, 240, 480]:
-        for M in M_list:
-            tt1 = []
-            tt2 = []
-            for i in range (10):
-                xi_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=True))
-                model = gp.Model('Master Problem')
-                apub = APUB(A, b, n_items=n_items, n_machines=n_machines, model=model)
-                start1 = time.perf_counter()
-                apub.extensive_form(xi_samples, alpha=0.1, M_bootstrap=M)
-                end1 = time.perf_counter()
-                #print(f'extensive form: {end1 - start1}s')
-                start2 = time.perf_counter()
-                apub.solve_two_stage_apub(
-                    xi_samples,
-                    alpha=0.1,
-                    M_bootstrap=M,
-                )
-                end2 = time.perf_counter()
-                #print(f'ours: {end2 - start2}s')
-                tt1.append(end1 - start1)
-                tt2.append(end2 - start2)
-            time_list['extensive form'][data_size][M] = np.mean(tt1)
-            time_list['ours'][data_size][M] = np.mean(tt2)
-            print(f"method: extensive form, data size: {data_size}, M: {M}, time: {time_list['extensive form'][data_size][M]}")
-            print(f"method: l-shaped, data size: {data_size}, M: {M}, time: {time_list['ours'][data_size][M]}")
-
-    plt.figure(figsize=(8, 6))
-    plt.rcParams["text.usetex"] = True
-    plt.rcParams["font.family"] = "serif"
-    plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
-    bold_times = FontProperties(family='Times New Roman', size=16, weight='bold')
-
-    color_map = {
-        60: 'blue',
-        120: 'red',
-        240: 'black',
-        480: 'green'
-        # 可以加更多 data_size
-    }
-
-    # 定义线型：每个 method 一种线型
-    linestyle_map = {
-        'extensive form': '-',  # 实线
-        'ours': '--',  # 虚线
-    }
-
-    for method in time_list:
-        for data_size in time_list[method]:
-            m_dict = time_list[method][data_size]
-            m_sizes = sorted(m_dict.keys())
-            times = [m_dict[m] for m in m_sizes]
-            label = f"{method}, N={data_size}"
-            plt.plot(
-                m_sizes,
-                times,
-                label=label,
-                color=color_map.get(data_size, 'gray'),
-                linestyle=linestyle_map.get(method, '-')
-            )
-
-    # m_dict = time_list['extensive form'][480]
-    # m_sizes = sorted(m_dict.keys())
-    # times = [m_dict[m] for m in m_sizes]
-    # label = f"{'extensive form'}, N={480}"
-    # plt.plot(
-    #     m_sizes,
-    #     times,
-    #     label=label,
-    #     color=color_map.get(data_size, 'gray'),
-    #     linestyle=linestyle_map.get('extensive form', '-')
-    # )
-
-    plt.xlabel('bootstrap size', fontproperties=bold_times)
-    plt.ylabel('Time (s)', fontproperties=bold_times)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+        # Load data for this size
+        with open(f"./samples/{data_size}/data.pkl", "rb") as f:
+            xi_samples_list = pickle.load(f)['train_samples']
+        
+        # Prepare arguments for parallel processing
+        process_args = [
+            (A, b, n_items, n_machines, M, xi_samples_list)
+            for M in M_list
+        ]
+        
+        # Process M values in parallel
+        with ProcessPoolExecutor(max_workers=n_cores) as executor:
+            futures = [executor.submit(process_M, args) for args in process_args]
+            
+            # Collect results as they complete
+            for future in as_completed(futures):
+                res = future.result()
+                M = res['M']
+                result['extensive form'][data_size][M] = res['extensive_form_time']
+                result['ours'][data_size][M] = res['lshape_time']
+                result['cuts'][data_size][M] = res['cuts']
+                
+                print(f"[Data={data_size}, M={M}] EF: {res['extensive_form_time']:.2f}s | "
+                      f"L-shape: {res['lshape_time']:.2f}s | Cuts: {res['cuts']:.2f}")
+    
+    # Convert defaultdict to regular dict for JSON serialization
+    result_dict = {k: dict(v) for k, v in result.items()}
+    
+    # Save results to JSON
+    with open(save_path, "w") as f:
+        json.dump(result_dict, f, indent=4)
+    print(f"Results saved to {save_path}")
 
 
-def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K=30, alpha_list=None):
+   
+def worker(alpha, train_samples, test_samples, A, b, c, M, n_items, n_machines):
+    apub = APUB(A, b, c=c, n_items=n_items, n_machines=n_machines, model=gp.Model())
+    x_optimal, _, certificate,num_optimal_cut = apub.solve_two_stage_apub(train_samples, alpha=alpha, M_bootstrap=M)
+    eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=c, n_items=n_items, n_machines=n_machines)
+    return alpha, eval_result['mean_cost'], eval_result['reliability'], certificate, num_optimal_cut
+
+
+def run_experiment(A, b, c, M, n_items, n_machines, data_size, K=30, alpha_list=None, max_workers=None, data_path=None):
     if alpha_list is None:
         alpha_list = [0.05 * i for i in range(1, 21)]
     alpha_list = np.array(alpha_list)
 
+    if data_path is not None:
+        with open(f"{data_path}", "rb") as f:
+            samples = pickle.load(f)
+            train_samples_list = samples['train_samples']
+            test_samples = samples['test_samples']
+    else:
+        pg = ParametersGenerator()
+        test_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=False))
+
     results = {alpha: {'costs': [], 'reliabilities': []} for alpha in alpha_list}
-    pg = ParametersGenerator()
     
     for trial in range(K):
-        train_samples = pg.generate_parameters(sample_from_config(cfg_or_path = "config.yaml", train=True))
-        test_samples = pg.generate_parameters(sample_from_config(cfg_or_path = "config.yaml", train=False))
+        if data_path is not None:
+            train_samples = train_samples_list[trial]
+        else:
+            pg = ParametersGenerator()
+            train_samples = pg.generate_parameters(sample_from_config(cfg_or_path="config.yaml", train=True))
 
-        for alpha in alpha_list:
-            apub = APUB(A, b, c=c, n_items=n_items, n_machines=n_machines, model=gp.Model())
-            x_optimal, _, certificate = apub.solve_two_stage_apub(train_samples, alpha=alpha, M_bootstrap=M)
-            # x_optimal, certificate = apub.extensive_form(train_samples, alpha=alpha, M_bootstrap=M)
-            eval_result = evaluate_oos(certificate, x_optimal, test_samples, c=c, n_items=n_items, n_machines=n_machines)
-            results[alpha]['costs'].append(eval_result['mean_cost'])
-            results[alpha]['reliabilities'].append(eval_result['reliability'])
-            print(f'epoch {trial+1} of {K}, alpha={alpha:.2f}, '
-                  f'cost: {np.mean(results[alpha]["costs"]):.2f}, reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, certificate: {certificate:.2f}')
-    
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(worker, alpha, train_samples, test_samples, A, b, c, M, n_items, n_machines): alpha
+                for alpha in alpha_list
+            }
+            for future in as_completed(futures):
+                alpha, cost, reliability, certificate, num_optimal_cut = future.result()
+                results[alpha]['costs'].append(cost)
+                results[alpha]['reliabilities'].append(reliability)
+                print(f'epoch {trial+1} of {K}, alpha={alpha:.2f}, '
+                      f'cost: {np.mean(results[alpha]["costs"]):.2f}, '
+                      f'reliability: {np.mean(results[alpha]["reliabilities"]):.2f}, '
+                      f'certificate: {certificate:.2f}, '
+                      f'num_optimal_cut: {num_optimal_cut:.2f}')
+
     serializable_results = {
         str(alpha): {
             'costs': [float(c) for c in vals['costs']],
             'reliabilities': [float(r) for r in vals['reliabilities']]
+            #'num_optimal_cuts': [float(n) for n in vals['num_optimal_cuts']]
         }
-        for alpha, vals in results.items()}
+        for alpha, vals in results.items()
+    }
 
     save_path = f"apub_results_ee{data_size}.json"
     with open(save_path, "w") as f:
@@ -174,12 +193,12 @@ def run_experiment(A, b, c, M, n_items, n_machines, data_size, test_size=1000, K
 
 
 def plot_apub_results(results, mark_outliers=True):
-    try:
-        plt.rcParams["text.usetex"] = True
-        plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
-    except Exception:
-        print("Warning: LaTeX not found, using default text rendering.")
-        plt.rcParams["text.usetex"] = False
+    # try:
+    #     plt.rcParams["text.usetex"] = True
+    #     plt.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
+    # except Exception:
+    #     print("Warning: LaTeX not found, using default text rendering.")
+    #     plt.rcParams["text.usetex"] = False
 
     plt.rcParams["font.family"] = "serif"
     bold_times = FontProperties(family='Times New Roman', size=16, weight='bold')

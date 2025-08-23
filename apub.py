@@ -185,7 +185,7 @@ class APUB:
         x_opt = np.array([x_s[i].X for i in range(self.n_items)])
         obj_val = self.model.ObjVal
 
-        return x_opt, eta, obj_val
+        return x_opt, eta, obj_val, num_optimal_cut
 
     def extensive_form(self, params_list, alpha=0.2, M_bootstrap=500):
         N = len(params_list['h'])  # Number of original scenarios
