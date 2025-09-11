@@ -2,7 +2,7 @@ from evaluation import *
 from utils import load_config
 
 if __name__ == '__main__':
-    cfg_path = "config/config.yaml"
+    cfg_path = "config.yaml"
     np.random.seed(42) 
     full_cfg = load_config(cfg_path)
     rg_cfg = full_cfg.get("random_generator", full_cfg)
