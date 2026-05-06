@@ -12,6 +12,12 @@ Download the [generated data](https://drive.google.com/file/d/1WSAZT3YrlOqNV7PMf
 
 Before running the code, make sure you have a licensed Gurobi.
 
+To reproduce the results reported in our paper, please simply run:
+```
+python main.py
+```
+In addition, you can uncomment the corresponding lines in main.py to evaluate the time efficiency of our algorithm.
+
 
 
 ## Citation
