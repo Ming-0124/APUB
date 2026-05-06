@@ -3,3 +3,4 @@ This repository provides a implementation of [APUB](https://openreview.net/forum
 
 ## Instructions
 Install dependencies. This repository is tested with Windows11 and Python 3.8.
+`pip install -r requirements.txt`
