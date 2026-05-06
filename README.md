@@ -1,4 +1,5 @@
 # Minimizing Upper Confidence Bounds: A Data-Driven Framework for Stochastic Programming
-This repository provides a implementation of [APUB](https://openreview.net/forum?id=eXLcL70GXO&referrer=%5BAuthor%20Console%5D(%2Fgroup%3Fid%3DICML.cc%2F2026%2FConference%2FAuthors%23your-submissions)) (ICML 2026).
+This repository provides a implementation of [APUB](https://openreview.net/forum?id=eXLcL70GXO&referrer=%5BAuthor%20Console%5D(%2Fgroup%3Fid%3DICML.cc%2F2026%2FConference%2FAuthors%23your-submissions)) (ICML 2026), a novel framework for stochastic programming that minimizes an upper confidence bound (UCB) on the expected random cost, acting as a robustness-seeking strategy. We also develop practical solution methods, including a bootstrap sampling approximation method and an L-shaped method, to solve APUB optimization problems, with a specific focus on two-stage linear stochastic optimization with random recourse. Empirical demonstrations on a two-stage product mix problem reveal the significant benefits of our APUB optimization framework, which fortifies the process against epistemic uncertainty while reinforcing key decision-making attributes like reliability and consistency.
 
 ## Instructions
+Install dependencies. This repository is tested with Windows11 and Python 3.8.
