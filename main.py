@@ -20,5 +20,5 @@ if __name__ == '__main__':
 
     # evaluate_M_T_performance(A, b, c=c, M_list=[1000,2000,3000,4000,5000], n_items=I, n_machines=J, save_path='./results/ef_time.json')
 
-    results = run_experiment(A, b, c=c, M=M, n_items=I, n_machines=J, data_size=data_size, K=epochs, data_path="./samples/120.pkl")
+    results = run_experiment(A, b, c=c, M=M, n_items=I, n_machines=J, data_size=data_size, K=epochs, data_path="./120.pkl")
 
