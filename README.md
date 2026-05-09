@@ -8,7 +8,7 @@ Install dependencies. This repository is tested with Windows11 and Python 3.8.
 pip install -r requirements.txt
 ```
 
-We provide 120,140,480 data size files that used in the paper, to run the code, unzip the data files under the root directory of the project firstly. Download the [generated data](https://drive.google.com/file/d/1WSAZT3YrlOqNV7PMfRi_5Ai5TKOiuDUT/view?usp=sharing) with the parameters given and used in our paper and unzip the file under the root directory of the project. 
+We provide 120,140,480 and 960 data size files that used in the paper, to run the code, unzip the data files under the root directory of the project firstly. 
 
 Before running the code, make sure you have a licensed Gurobi.
 
